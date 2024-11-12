@@ -7,7 +7,7 @@ import sys
 
 def usage():
     print("""
-    Usage: script.py -t <type> [options] [path]
+    Usage: diag.py -t <type> [options] [path]
     ----- Required --------
       -t type - valid choices are "docker", "kube", "standalone"
     ----- Options --------
