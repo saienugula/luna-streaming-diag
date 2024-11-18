@@ -171,6 +171,7 @@ def fetch_tenants_info(args):
 
 
     if args.type == "kube":
+     print("collecting pulsar topic stats from the kube")
     # Get the list of pods matching 'bastion' in their name
      pods = subprocess.getoutput(f"kubectl get pods -n {args.namespace} | grep -i bastion | awk '{{print $1}}'").split()
 
