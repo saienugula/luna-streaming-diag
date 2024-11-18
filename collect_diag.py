@@ -39,33 +39,120 @@ def collect_logs(args):
             subprocess.run(["docker", "cp", f"{container_id}:/var/log/pulsar", args.output_dir])
 
     elif args.type == "kube":
-        print("Collecting broker logs...")
-        os.makedirs(f"{args.output_dir}/logs/broker", exist_ok=True)
-        pods = subprocess.getoutput(f"kubectl get pods -n {args.namespace} | grep -i broker | awk '{{print $1}}'").split()
-        for pod in pods:
-            with open(f"{args.output_dir}/logs/broker/{pod}.log", "w") as log_file:
-                subprocess.run(["kubectl", "-n", args.namespace, "logs", pod], stdout=log_file)
+        print("Collecting broker,bookkeeper,zookeeper and proxy logs")
+        #create logs directory
+        os.makedirs(f"{args.output_dir}/logs", exist_ok=True)
+        # collect pods information
+        pods_info = subprocess.getoutput(f"kubectl get pods -n {args.namespace} --no-headers -o custom-columns=NAME:.metadata.name,STATUS:.status.phase").splitlines()
+        broker_pods = [line.split()[0] for line in pods_info if "broker" in line.lower() and "Running" in line]
+        proxy_pods = [line.split()[0] for line in pods_info if "proxy" in line.lower() and "Running" in line]
+        bookie_pods = [line.split()[0] for line in pods_info if "bookkeeper" in line.lower() and "Running" in line]
+        zookeeper_pods = [line.split()[0] for line in pods_info if "zookeeper" in line.lower() and "Running" in line]
 
-        print("Collecting proxy logs...")
-        os.makedirs(f"{args.output_dir}/logs/proxy", exist_ok=True)
-        pods = subprocess.getoutput(f"kubectl get pods -n {args.namespace} | grep -i proxy | awk '{{print $1}}'").split()
-        for pod in pods:
-            with open(f"{args.output_dir}/logs/proxy/{pod}.log", "w") as log_file:
-                subprocess.run(["kubectl", "-n", args.namespace, "logs", pod], stdout=log_file)
+        # Collect Broker logs
+        #print("Collecting broker logs...")
+        if not broker_pods:
+            print("No running Broker pods found.")
+            return
+        for pod in broker_pods:
+            try:
+                output_file_path = f"{args.output_dir}/logs/broker/{pod}"
+                os.makedirs(output_file_path, exist_ok=True)
+                # Collect logs from running pods
+                log_file_path = f"{output_file_path}/{pod}.log"
+                with open(log_file_path, "w") as log_file:
+                    subprocess.run(["kubectl", "-n", args.namespace, "logs", pod, "--all-containers=true"],stdout=log_file,stderr=subprocess.PIPE,check=True)
+                # Copy logs from the pod
+                process = subprocess.Popen(["kubectl", "-n", args.namespace, "cp", f"{pod}:/pulsar/logs/", output_file_path],stderr=subprocess.PIPE,stdout=subprocess.PIPE)
+                _, err = process.communicate()
+                # Only print errors that are not the tar warning
+                if err and b"Removing leading '/'" not in err:
+                    print(f"Error copying logs from pod {pod}: {err.decode()}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error collecting logs for pod {pod}: {e}")
+                continue
+            except Exception as e:
+                print(f"Unexpected error for pod {pod}: {e}")
+                continue
+       
+        # Collect Proxy logs
+        #print("Collecting proxy logs...")
+        if not proxy_pods:
+            print("No running Proxy pods found.")
+            return
+        for pod in proxy_pods:
+            try:
+                output_file_path = f"{args.output_dir}/logs/proxy/{pod}"
+                os.makedirs(output_file_path, exist_ok=True)
+                # Collect logs from running pods
+                log_file_path = f"{output_file_path}/{pod}.log"
+                with open(log_file_path, "w") as log_file:
+                    subprocess.run(["kubectl", "-n", args.namespace, "logs", pod, "--all-containers=true"],stdout=log_file,stderr=subprocess.PIPE,check=True)
+                # Copy logs from the pod
+                process = subprocess.Popen(["kubectl", "-n", args.namespace, "cp", f"{pod}:/pulsar/logs/", output_file_path],stderr=subprocess.PIPE,stdout=subprocess.PIPE)
+                _, err = process.communicate()
+                # Only print errors that are not the tar warning
+                if err and b"Removing leading '/'" not in err:
+                    print(f"Error copying logs from pod {pod}: {err.decode()}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error collecting logs for pod {pod}: {e}")
+                continue
+            except Exception as e:
+                print(f"Unexpected error for pod {pod}: {e}")
+                continue
+       
+       ## Collecting bookie logs
+        #print("Collecting bookie logs...")
+        if not bookie_pods:
+            print("No running Bookie pods found.")
+            return
+        for pod in bookie_pods:
+            try:
+                output_file_path = f"{args.output_dir}/logs/bookie/{pod}"
+                os.makedirs(output_file_path, exist_ok=True)
+                # Collect logs from running pods
+                log_file_path = f"{output_file_path}/{pod}.log"
+                with open(log_file_path, "w") as log_file:
+                    subprocess.run(["kubectl", "-n", args.namespace, "logs", pod, "--all-containers=true"],stdout=log_file,stderr=subprocess.PIPE,check=True)
+                # Copy logs from the pod
+                process = subprocess.Popen(["kubectl", "-n", args.namespace, "cp", f"{pod}:/pulsar/logs/", output_file_path],stderr=subprocess.PIPE,stdout=subprocess.PIPE)
+                _, err = process.communicate()
+                # Only print errors that are not the tar warning
+                if err and b"Removing leading '/'" not in err:
+                    print(f"Error copying logs from pod {pod}: {err.decode()}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error collecting logs for pod {pod}: {e}")
+                continue
+            except Exception as e:
+                print(f"Unexpected error for pod {pod}: {e}")
+                continue
+        # Collect Zookeeper logs
+        #print("Collecting Zookeeper logs...")
+        if not zookeeper_pods:
+            print("No running Zookeeper pods found.")
+            return
+        # Iterate through each Zookeeper pod and collect logs
+        for pod in zookeeper_pods:
+            try:
+                output_file_path = f"{args.output_dir}/logs/zookeeper/{pod}"
+                os.makedirs(output_file_path, exist_ok=True)
 
-        print("Collecting bookie logs...")
-        os.makedirs(f"{args.output_dir}/logs/bookie", exist_ok=True)
-        pods = subprocess.getoutput(f"kubectl get pods -n {args.namespace} | grep -i bookkeeper | awk '{{print $1}}'").split()
-        for pod in pods:
-            with open(f"{args.output_dir}/logs/bookie/{pod}.log", "w") as log_file:
-                subprocess.run(["kubectl", "-n", args.namespace, "logs", pod], stdout=log_file)
-
-        print("Collecting zookeeper logs...")
-        os.makedirs(f"{args.output_dir}/logs/zookeeper", exist_ok=True)
-        pods = subprocess.getoutput(f"kubectl get pods -n {args.namespace} | grep -i zookeeper | awk '{{print $1}}'").split()
-        for pod in pods:
-            with open(f"{args.output_dir}/logs/zookeeper/{pod}.log", "w") as log_file:
-                subprocess.run(["kubectl", "-n", args.namespace, "logs", pod], stdout=log_file)
+            # Collect logs from running pods
+                log_file_path = f"{output_file_path}/{pod}.log"
+                with open(log_file_path, "w") as log_file:
+                    subprocess.run(["kubectl", "-n", args.namespace, "logs", pod, "--all-containers=true"],stdout=log_file,stderr=subprocess.PIPE,check=True)
+            # Copy logs from the pod
+                process = subprocess.Popen(["kubectl", "-n", args.namespace, "cp", f"{pod}:/pulsar/logs/", output_file_path],stderr=subprocess.PIPE,stdout=subprocess.PIPE)
+                _, err = process.communicate()
+            # Only print errors that are not the tar warning
+                if err and b"Removing leading '/'" not in err:
+                    print(f"Error copying logs from pod {pod}: {err.decode()}")
+            except subprocess.CalledProcessError as e:
+                print(f"Error collecting logs for pod {pod}: {e}")
+                continue  # Continue to the next pod if an error occurs
+            except Exception as e:
+                print(f"Unexpected error for pod {pod}: {e}")
+                continue  # Continue to the next pod if any other exception occurs
 
     elif args.type == "standalone":
         print("Collecting logs from standalone")
