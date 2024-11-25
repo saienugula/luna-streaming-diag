@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import logging
+import docker
 
 
 
@@ -25,6 +26,7 @@ def check_type(type_arg):
         sys.exit(1)
 
 def check_output_dir(output_dir):
+    logger = logging.getLogger("OutputDir")
     if not output_dir:
         output_dir = os.path.join(os.getcwd(), "pulsar_diag")
         os.makedirs(output_dir, exist_ok=True)
@@ -32,7 +34,8 @@ def check_output_dir(output_dir):
         
         output_dir = os.path.join(output_dir, "pulsar_diag")
         os.makedirs(output_dir)
-    print(f"Using {output_dir} as the output directory.")
+    logger.info(f"Using {output_dir} as the output directory.")
+    #print(f"Using {output_dir} as the output directory.")
     return output_dir
 
 def setup_logging(loglevel):
@@ -73,16 +76,28 @@ class kubernetesPods:
         return[self.pod_status.append(pod[1]) for pod in self.pods]
         logger.debug(f"Pods information: {self.pod_status}")
 
-
-
-def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zookeeper_pods=None, bastion_pods=None,):
+def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zookeeper_pods=None, bastion_pods=None, container_name=None, container_id=None):
     logger = logging.getLogger("LogsCollector")
     if args.type == "docker":
-        #print("Collecting logs from docker")
-        logger.info("Collecting logs from docker")
-        container_ids = subprocess.getoutput("docker ps -a | grep pulsar | awk '{print $1}'").split()
-        for container_id in container_ids:
-            subprocess.run(["docker", "cp", f"{container_id}:/var/log/pulsar", args.output_dir])
+        logger.info("Collecting logs from Docker containers...")
+        output_file_path = f"{args.output_dir}/logs"
+        os.makedirs(output_file_path, exist_ok=True)
+        try:
+            if not container_name:
+                logger.error("No container name provided. Exiting...")
+                return
+            logger.info(f"Collecting logs from container {container_name}...")
+            try:
+                with open(f"{output_file_path}/{container_name}.log", "w") as log_file:
+                    subprocess.run(["docker", "logs", container_id], stdout=log_file, stderr=subprocess.PIPE, check=True)
+                subprocess.run(["docker", "cp", f"{container_id}:/pulsar/logs/", output_file_path], stderr=subprocess.PIPE, check=True)
+                logger.info(f"Logs collected from {container_name} to {output_file_path}")
+                logger.info(f"Successfully collected logs from container {container_name}")
+            except Exception as e:
+                logger.error(f"Failed to collect logs from container {container_name}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error occurred while collecting Docker logs: {e}")
+
 
     elif args.type == "kube":
         #print("Collecting broker,bookkeeper,zookeeper and proxy logs")
@@ -212,15 +227,88 @@ def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zook
         print("Collecting logs from standalone")
         subprocess.run(["cp", "-r", "/var/log/pulsar", args.output_dir])
 
-def fetch_tenants_info(args, broker_pods=None, proxy_pods=None, bastion_pods=None):
+def fetch_tenants_info(args, broker_pods=None, proxy_pods=None, bastion_pods=None, container_name=None, container_id=None):
     logger = logging.getLogger("TenantsInfoCollector")
     if args.type == "docker":
-        print("Fetching pulsar info from docker")
-        container_ids = subprocess.getoutput("docker ps -a | grep pulsar | awk '{print $1}'").split()
-        for container_id in container_ids:
-            result = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "brokers", "list"],
-                capture_output=True, text=True, check=True)
-            print(result.stdout)
+        logger.info("Collecting pulsar tenants info from docker")
+        output_file_path = os.path.join(args.output_dir, "tenants_namespaces_topics_list.txt")
+        with open(output_file_path, "w") as f:
+         f.write("Pulsar Tenants, Namespaces, and Topics\n")
+        if not container_id:
+            logger.error("No container ID provided. Exiting...")
+            return
+        else:
+            try:
+                result = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "tenants", "list"],
+                    capture_output=True, text=True, check=True)
+                tenants = result.stdout.splitlines()
+                logger.debug(f"Tenants: {tenants}")
+                for tenant in tenants:
+                    tenant = tenant.strip()
+                    logger.debug(f"Tenant: {tenant}")
+                    # Write tenant to file
+                    with open(output_file_path, "a") as f:
+                        f.write(f"\nTenant: {tenant}\n")
+
+                    try:
+                        logger.debug(f"Fetching namespaces for tenant {tenant}")
+                        # Fetch namespaces for the tenant
+                        result = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "namespaces", "list", tenant],
+                            capture_output=True, text=True, check=True)
+                        pulsar_namespaces = result.stdout.splitlines()
+                        logger.debug(f"Namespaces: {pulsar_namespaces}")
+                    except subprocess.CalledProcessError as e:
+                        logger.error(f"Error fetching namespaces for tenant {tenant}: {e}")
+                        continue
+          
+                    for pns in pulsar_namespaces:
+                        #write namespace retention policies to file
+                        with open(output_file_path, "a") as f:
+                            f.write(f"  Namespace: {pns}\n")
+                        try:
+                            # Fetch namespace retention policies
+                            logger.debug(f"Fetching retention policies for namespace {pns}")
+                            retention_policies = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "namespaces", "get-retention", pns],
+                                capture_output=True, text=True, check=True)
+                            retention = retention_policies.stdout.splitlines()
+                            # Write retention policies to file
+                            with open(output_file_path, "a") as f:
+                                f.write(f"          Retention Policies: {retention}\n")
+                        except subprocess.CalledProcessError as e:
+                            logger.error(f"Error fetching retention policies for namespace {pns}: {e}")
+                            continue
+                
+                        try:
+                            # Fetch topics for the namespace
+                            logger.debug(f"Fetching topics for namespace {pns}")
+                            topics_result = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "topics", "list", pns],
+                                capture_output=True, text=True, check=True)
+                            topics = topics_result.stdout.splitlines()
+                        except subprocess.CalledProcessError as e:
+                            logger.error(f"Error fetching topics for namespace {pns}: {e}")
+                            continue
+
+                        for topic in topics:
+                            # Write topic to file
+                            with open(output_file_path, "a") as f:
+                                f.write(f"     Topic: {topic}\n")
+                            try:
+                                # Fetch topic stats
+                                logger.debug(f"Fetching stats for topic {topic}")
+                                topic_stats = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "topics", "stats", topic],
+                                    capture_output=True, text=True, check=True)
+                                stats = topic_stats.stdout.splitlines()
+                                # Write stats to file
+                                with open(output_file_path, "a") as f:
+                                    f.write(f"          Stats: {stats}\n")
+                            except subprocess.CalledProcessError as e:
+                                logger.error(f"Error fetching stats for topic {topic}: {e}")
+                                continue
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error fetching tenants: {e}")
+                return
+            logger.info(f"Successfully Collected the Tenants, Namespaces, and Topics info and saved to {output_file_path}")
+            #print(result.stdout)
         
 
 
@@ -339,17 +427,29 @@ def fetch_tenants_info(args, broker_pods=None, proxy_pods=None, bastion_pods=Non
 
      logger.info(f"Successfully Collected the Tenants, Namespaces, and Topics info and saved to {output_file_path}")
 
-def get_pulsar_config(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zookeeper_pods=None, bastion_pods=None):
+def get_pulsar_config(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zookeeper_pods=None, bastion_pods=None, container_id=None, container_name=None):
+    logger = logging.getLogger("PulsarConfigCollector")
     if args.type == "docker":
-        print("Fetching pulsar config from docker")
-        container_ids = subprocess.getoutput("docker ps -a | grep pulsar | awk '{print $1}'").split()
-        for container_id in container_ids:
-            result = subprocess.run(["docker", "exec", "-it", container_id, "/pulsar/bin/pulsar-admin", "brokers", "list"],
-                capture_output=True, text=True, check=True)
-            print(result.stdout)
+        logger.info("Collecting pulsar config from docker")
+        if not container_id:
+            logger.error("No container ID provided. Exiting...")
+            return
+        else:
+            #copying the configuration from the docker instance
+            output_file_path = f"{args.output_dir}"
+            os.makedirs(output_file_path, exist_ok=True)
+            try:
+                subprocess.run(["docker", "cp", f"{container_id}:/pulsar/conf/", f"{output_file_path}"],
+                    capture_output=True, text=True, check=True)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error fetching pulsar config from container {container_id}: {e}")
+                return
+            except Exception as e:
+                logger.error(f"Unexpected error fetching pulsar config from container {container_id}: {e}")
+                return
+            logger.info(f"Successfully collected pulsar configs from container {container_id}")
 
     elif args.type == "kube":
-        logger = logging.getLogger("PulsarConfigCollector")
         logger.info("Collecting pulsar config from kube")
         output_file_path = f"{args.output_dir}/conf"
         os.makedirs(output_file_path, exist_ok=True)
@@ -429,19 +529,21 @@ def main():
     parser.add_argument("-t", "--type", required=True, choices=["docker", "kube", "standalone"], help="Deployment type")
     parser.add_argument("-n", "--namespace", default="pulsar", help="Namespace of the Pulsar cluster (default: pulsar)")
     parser.add_argument("-o", "--output_dir", help="Output directory for logs (default: current directory)")
+    parser.add_argument("-c", "--container", help="Container name to collect logs from")
     parser.add_argument("-l", "--loglevel", default="INFO", help="Log level (default: INFO)")
     args = parser.parse_args()
-    if args.namespace == "pulsar":
-        print("Using default namespace as 'pulsar'")
-    else:
-        print(f"Using namespace: {args.namespace}")
     setup_logging(args.loglevel)
-
     check_type(args.type)
     args.output_dir = check_output_dir(args.output_dir)
 
     
     if args.type == "kube":
+        if args.namespace == "pulsar":
+            logger = logging.getLogger("Namespace")
+            logger.info("Using default namespace as 'pulsar'")
+        else:
+            logger = logging.getLogger("Namespace")
+            logger.info(f"Using namespace: {args.namespace}")
 
         kube_pods = kubernetesPods(args.namespace)
         kube_pods.get_pods()
@@ -472,8 +574,58 @@ def main():
         logging.info("Successfully collected pulsar cluster diagnostics")
 
 
+    if args.type == "docker":
+        logger = logging.getLogger("Docker")
+        client = docker.from_env()
+
+        try:
+            container_name = None
+            container_id = None
+
+            if args.container:
+                try:
+                    logger.info(f"Using specified container: {args.container}")
+                    # Attempt to retrieve the specific container
+                    container = client.containers.get(args.container)
+                    logger.debug(f"Found the below container details: {container}")
+                    containers = [container]  # Wrap in a list for uniform handling
+                    container_name = container.name
+                    container_id = container.id
+                    logger.debug(f"Container Name: {container_name} and Container ID: {container_id}")
+                except docker.errors.NotFound:
+                    logger.error(f"Container '{args.container}' not found. Please check the name and try again.")
+                    return container_name, container_id
+            else:
+                # List all containers with "pulsar" in their name
+                containers = [container for container in client.containers.list(all=True) if "pulsar" in container.name]
+                standalone_containers = [container for container in client.containers.list(all=True) if "pulsar-standalone" in container.name]
+                logger.debug(f"Containers: {[container.name for container in containers]}")
+                logger.debug(f"Standalone Containers: {[container.name for container in standalone_containers]}")
+
+                # If no specific container is provided, prioritize standalone containers
+                if not containers and not standalone_containers:
+                    logger.error("No Pulsar containers found.")
+                    logger.error("You can provide a specific container name using the -c/--container argument.")
+                    return container_name, container_id
+
+                containers = standalone_containers if standalone_containers else containers
+                container = containers[0]  # Select the first container
+                container_name = container.name
+                container_id = container.id
+                logger.debug(f"Selected Container Name: {container_name} and Container ID: {container_id}")
+
+        except Exception as e:
+            logger.error(f"Unexpected error occurred while collecting container information: {e}")
+            return container_name, container_id
+
+        #return container_name, container_id
+
+        #logger.info(f"Found {container_name} and {container_id}")
+        collect_logs(args,container_name=container_name, container_id=container_id)
+        fetch_tenants_info(args, container_name=container_name, container_id=container_id)
+        get_pulsar_config(args, container_name=container_name, container_id=container_id)
+         #get_pulsar_config(args)
+        logging.info("Successfully collected pulsar cluster diagnostics from docker")
 
 if __name__ == "__main__":   
     main()
-
-
