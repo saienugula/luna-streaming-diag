@@ -2,6 +2,8 @@
 
 Collect the diagnostics of luna streaming(Apache Pulsar) deployed in kubernetes or in Docker or as a standalone cluster.
 
+Currently the script only works for docker and the Kube
+
 ```
     Usage: diag.py -t <type> [options] [path]
     ----- Required --------
