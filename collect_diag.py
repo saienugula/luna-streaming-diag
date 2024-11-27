@@ -17,7 +17,7 @@ def usage():
     ----- Options --------
       -n namespace of the pulsar cluster (default: pulsar)
       -o output_dir - where to put resulting file (default: current directory)
-      -c container - container name to collect logs from
+      -c container - container name to collect logs from (applies only for docker type)
       -l loglevel - log level (default: INFO) level can be DEBUG, INFO, WARNING, ERROR, CRITICAL
     """)
 
@@ -26,6 +26,7 @@ def check_type(type_arg):
         usage()
         sys.exit(1)
 
+#Below function checks for the output directory and creates one if it does not exist on the current directory
 def check_output_dir(output_dir):
     logger = logging.getLogger("OutputDir")
     if not output_dir:
@@ -36,9 +37,9 @@ def check_output_dir(output_dir):
         output_dir = os.path.join(output_dir, "pulsar_diag")
         os.makedirs(output_dir)
     logger.info(f"Using {output_dir} as the output directory.")
-    #print(f"Using {output_dir} as the output directory.")
     return output_dir
 
+#Below function sets up the logging level and format
 def setup_logging(loglevel):
     # Set the logging level based on the loglevel argument
     level = logging.DEBUG if loglevel == "DEBUG" else logging.INFO
@@ -46,10 +47,11 @@ def setup_logging(loglevel):
     # Configure logging with the appropriate level and formatter
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' if loglevel == "DEBUG" else '%(asctime)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(name)s  - %(message)s'  
     )
     logging.basicConfig(level=loglevel, format=format)
 
+#Below class is used to fetch the pods information from the kubernetes cluster
 class kubernetesPods:
     def __init__(self, namespace):
         self.namespace = namespace
@@ -77,6 +79,7 @@ class kubernetesPods:
         return[self.pod_status.append(pod[1]) for pod in self.pods]
         logger.debug(f"Pods information: {self.pod_status}")
 
+#Below function collects logs from the docker containers and kube pods
 def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zookeeper_pods=None, bastion_pods=None, container_name=None, container_id=None):
     logger = logging.getLogger("LogsCollector")
     if args.type == "docker":
@@ -101,12 +104,10 @@ def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zook
 
 
     elif args.type == "kube":
-        #print("Collecting broker,bookkeeper,zookeeper and proxy logs")
         logger.info("Collecting logs from kube")
         #create logs directory
         os.makedirs(f"{args.output_dir}/logs", exist_ok=True)
         # Collect Broker logs
-        #print("Collecting broker logs...")
         if not broker_pods:
             logger.info(f"No running Broker pods found in namespace {args.namespace}")
             return
@@ -127,18 +128,17 @@ def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zook
                 logger.debug(f"Successfully copied Broker Logs from pod {pod}")
                 # Only print errors that are not the tar warning
                 if err and b"Removing leading '/'" not in err:
-                    print(f"Error copying logs from pod {pod}: {err.decode()}")
+                    logger.error(f"Error copying logs from pod {pod}: {err.decode()}")
             except subprocess.CalledProcessError as e:
-                print(f"Error collecting logs for pod {pod}: {e}")
+                logger.error(f"Error collecting logs for pod {pod}: {e}")
                 continue
             except Exception as e:
-                print(f"Unexpected error for pod {pod}: {e}")
+                logger.error(f"Unexpected error for pod {pod}: {e}")
                 continue
        
         # Collect Proxy logs
-        #print("Collecting proxy logs...")
         if not proxy_pods:
-            print("No running Proxy pods found.")
+            logger.info(f"No running Proxy pods found in namespace {args.namespace}")
             return
         logger.debug(f"Proxy Pods: {proxy_pods}")
         for pod in proxy_pods:
@@ -166,9 +166,8 @@ def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zook
                 continue
        
        ## Collecting bookie logs
-        #print("Collecting bookie logs...")
         if not bookie_pods:
-            print("No running Bookie pods found.")
+            logger.info(f"No running Bookie pods found in namespace {args.namespace}")
             return
         logger.debug(f"Bookie Pods: {bookie_pods}")
         for pod in bookie_pods:
@@ -193,10 +192,10 @@ def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zook
             except Exception as e:
                 logger.error(f"Unexpected error for pod {pod}: {e}")
                 continue
+        
         # Collect Zookeeper logs
-        #print("Collecting Zookeeper logs...")
         if not zookeeper_pods:
-            print("No running Zookeeper pods found.")
+            logger.info(f"No running Zookeeper pods found in namespace {args.namespace}")
             return
         logger.debug(f"Zookeeper Pods: {zookeeper_pods}")
         for pod in zookeeper_pods:
@@ -225,7 +224,7 @@ def collect_logs(args, broker_pods=None, proxy_pods=None, bookie_pods=None, zook
         logger.info("Successfully collected all logs from all pods")
 
     elif args.type == "standalone":
-        print("Collecting logs from standalone")
+        logger.info("Collecting logs from standalone")
         subprocess.run(["cp", "-r", "/var/log/pulsar", args.output_dir])
 
 def fetch_tenants_info(args, broker_pods=None, proxy_pods=None, bastion_pods=None, container_name=None, container_id=None):
@@ -309,7 +308,6 @@ def fetch_tenants_info(args, broker_pods=None, proxy_pods=None, bastion_pods=Non
                 logger.error(f"Error fetching tenants: {e}")
                 return
             logger.info(f"Successfully Collected the Tenants, Namespaces, and Topics info and saved to {output_file_path}")
-            #print(result.stdout)
         
 
 
@@ -494,10 +492,10 @@ def get_pulsar_config(args, broker_pods=None, proxy_pods=None, bookie_pods=None,
 
 
     elif args.type == "standalone":
-        print("Fetching pulsar config from standalone")
+        logger.info("Collecting pulsar config from standalone")
         result = subprocess.run(["/pulsar/bin/pulsar-admin", "brokers", "list"],
             capture_output=True, text=True, check=True)
-        print(result.stdout)
+        return result.stdout
 
 def describe_pods(args, pods_info=None):
     #Describe all pods in the namespace

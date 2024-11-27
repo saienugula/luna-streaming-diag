@@ -9,6 +9,6 @@ Collect the diagnostics of luna streaming(Apache Pulsar) deployed in kubernetes 
     ----- Options --------
       -n namespace of the pulsar cluster (default: pulsar)
       -o output_dir - where to put resulting file (default: current directory)
-      -c container - container name to collect logs from (applies only for docker)
+      -c container - container name to collect logs from (applies only for docker type)
       -l loglevel - log level (default: INFO) level can be DEBUG, INFO, WARNING, ERROR, CRITICAL
 ```
