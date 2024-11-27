@@ -569,7 +569,6 @@ def main():
         get_pulsar_config(args, broker_pods, proxy_pods, bookie_pods, zookeeper_pods, bastion_pods)
         describe_pods(args, kube_pods.pods)
         fetch_tenants_info(args, broker_pods,proxy_pods,bastion_pods)
-    #fetch_tenants_info(args, kube_pods.pods)
         logging.info("Successfully collected pulsar cluster diagnostics")
 
 
@@ -617,13 +616,9 @@ def main():
             logger.error(f"Unexpected error occurred while collecting container information: {e}")
             return container_name, container_id
 
-        #return container_name, container_id
-
-        #logger.info(f"Found {container_name} and {container_id}")
         collect_logs(args,container_name=container_name, container_id=container_id)
         fetch_tenants_info(args, container_name=container_name, container_id=container_id)
         get_pulsar_config(args, container_name=container_name, container_id=container_id)
-         #get_pulsar_config(args)
         logging.info("Successfully collected pulsar cluster diagnostics from docker")
 
 if __name__ == "__main__":   
